@@ -5,10 +5,13 @@ db操作模块
 '''
 import MySQLdb
 import threading
+import uuid
 import logging
 import functools
+import time
 
 engine = None
+
 def create_engine(user, password, database, host = '192.168.101.130', port = 3306, **kw):
 
     global engine
@@ -19,10 +22,23 @@ def create_engine(user, password, database, host = '192.168.101.130', port = 330
         params.update(kw)
         engine = _Engine(lambda: MySQLdb.connect(**params))
 
+def next_id(t = None):
+
+    if t is None:
+        t = time.time()
+    return '%015d%s000' % (int(t*100), uuid.uuid4().hex)
+
 def connection():
 
     return _ConnectionCtx()
 
+def _profiling(start, sql = ''):
+
+    t = time.time() - start
+    if t > 0.1:
+        logging.warning('[PROFILING][DB] %s:%s' % (t, sql))
+    else:
+        logging.info('[PROFILING][DB] %s %s' % (t, sql))
 
 def with_connection(func):
 
@@ -92,7 +108,7 @@ class _LasyConnection(object):
     def cursor(self):
         if self.connection is None:
             _connection = engine.connect()
-            logging.info('[CONNECTION][OPEN] connection <%s> ...'hex(id(_connection)))
+            logging.info('[CONNECTION][OPEN] connection <%s> ...' % hex(id(_connection)))
             self.connection = _connection
         return self.connection.cursor()
 
@@ -106,7 +122,7 @@ class _ConnectionCtx(object):
             _db_ctx.init()
             self.should_cleanup = True
         return self
-        return self
+
 
     def __exit__(self, exctype, excvale, traceback):
         global _db_ctx
