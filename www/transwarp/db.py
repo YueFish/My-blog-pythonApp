@@ -15,12 +15,15 @@ engine = None
 def create_engine(user, password, database, host = '192.168.101.130', port = 3306, **kw):
 
     global engine
+    if engine is not None:
+        raise DBError('Engine is already initialized.')
     params = dict(user = user, password = password, database = database, host = host, port = port)
     defaults = dict(use_unicode = True, charset = 'utf8', collation = 'utf8_general_ci', autocommit = False)
     for k, v in defaults.iteritems():
         params[k] = kw.pop(k, v)
-        params.update(kw)
-        engine = _Engine(lambda: MySQLdb.connect(**params))
+    params.update(kw)
+    params['buffered'] = True
+    engine = _Engine(lambda: MySQLdb.connect(**params))
 
 def next_id(t = None):
 
@@ -31,6 +34,9 @@ def next_id(t = None):
 def connection():
 
     return _ConnectionCtx()
+
+def transaction():
+    return _TransactionCtx()
 
 def _profiling(start, sql = ''):
 
@@ -46,6 +52,15 @@ def with_connection(func):
     def _wrapper(*args, **kw):
         with connection():
             return func(*args, **kw)
+    return _wrapper
+
+def with_transaction(func):
+
+    def _wrapper(*args, **kw):
+        start = time.time()
+        with TransacntioCtx():
+            func(*args, **kw)
+        _profiling(start)
     return _wrapper
 
 @with_connection
@@ -65,6 +80,15 @@ def _update(sql, *args):
     finally:
         if cursor:
             cursor.close()
+
+class DBError(Exception):
+    pass
+
+class MultiColumnsError(DBError):
+    pass
+
+
+
 
 class _Engine(object):
 
@@ -112,6 +136,15 @@ class _LasyConnection(object):
             self.connection = _connection
         return self.connection.cursor()
 
+    def commit(self):
+        self.connection.commit()
+
+    def cleanup(self):
+        if self.connection:
+            _conenection = self.connection
+            self.connection = None
+            logging.info('[CONNECTION] [CLOSE] conneciton <%s>...' %(id(connection)))
+            _conenection.close()
 
 class _ConnectionCtx(object):
 
@@ -129,6 +162,52 @@ class _ConnectionCtx(object):
         if self.should_cleanup:
             _db_ctx.cleanup()
 
+class _TransactionCtx(object):
+
+    def __enter__(self):
+        global _db_ctx
+        self.should_close_conn = False
+        if not _db_ctx.is_init():
+            _db_ctx.is_init
+            self.should_close_conn = True
+        _db_ctx.transactions += 1
+        logging.info('begin transaction.....' if _db_ctx.transactions == 1 else 'join current transaction...')
+        return self
+
+    def __exit__(self, exctype, excvalue, traceback):
+        global  _db_ctx
+        _db_ctx.transactions = 1
+        try:
+            if _db_ctx.transactions == 0:
+                if exctype is None:
+                    self.commit()
+                else:
+                    self.rollback()
+        finally:
+            if self.should_close_conn:
+                _db_ctx.cleanup()
+
+    def commit(self):
+        global  _db_ctx
+        logging.info('commit transation...')
+        try:
+            _db_ctx.connection.commit()
+            logging.info('commit ok.')
+        except:
+            logging.warning('commit failed .try rollback...')
+            _db_ctx.connection.rollback()
+            logging.warning('rollback ok.')
+            raise
+
+    def rollback(self):
+        global _db_ctx
+        logging.warning('rollback transaciton...')
+        _db_ctx.connection.rollback()
+        logging.info('rollback ok.')
+
+
+# thread-local db context:
+_db_ctx = _DbCtx()
 
 if __name__ == "__main__":
     _db_ctx = _DbCtx()
