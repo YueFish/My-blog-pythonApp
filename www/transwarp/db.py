@@ -12,18 +12,15 @@ import time
 
 engine = None
 
-def create_engine(user, password, database, host = '192.168.101.130', port = 3306, **kw):
+def create_engine(user, password, database, host , port ,timeout ):
 
     global engine
     if engine is not None:
         raise DBError('Engine is already initialized.')
-    params = dict(user = user, password = password, database = database, host = host, port = port)
-    defaults = dict(use_unicode = True, charset = 'utf8', collation = 'utf8_general_ci', autocommit = False)
-    for k, v in defaults.iteritems():
-        params[k] = kw.pop(k, v)
-    params.update(kw)
-    params['buffered'] = True
-    engine = _Engine(lambda: MySQLdb.connect(**params))
+    params =dict(host=host,port=port,user=user,passwd = password,db = database, connect_timeout=timeout )
+
+    engine = _Engine(MySQLdb.connect(**params))
+
 
 def next_id(t = None):
 
@@ -58,7 +55,7 @@ def with_transaction(func):
 
     def _wrapper(*args, **kw):
         start = time.time()
-        with TransacntioCtx():
+        with _TransactionCtx():
             func(*args, **kw)
         _profiling(start)
     return _wrapper
@@ -81,6 +78,47 @@ def _update(sql, *args):
         if cursor:
             cursor.close()
 
+def update(sql, *args):
+    return  _update(sql, *args)
+
+def insert(sql, *args):
+    return  _update(sql, *args)
+
+
+@with_connection
+def _select(sql, first, *args):
+    global _db_ctx
+    cursor = None
+    sql = sql.replace('?','%s')
+    logging.info('SQL: %s, ARGS :%S' %(sql, args))
+    try:
+        cursor = _db_ctx.connection.cursor()
+        cursor.execute(sql, args)
+        if cursor.description:
+            names = [x[0] for x in cursor.description]
+        if first:
+            values  = cursor.fetchone()
+            if not values:
+                return None
+            return Dict(names, values)
+        return [Dict(names, x) for x in cursor.fetchall()]
+    finally:
+        if cursor:
+            cursor.close()
+
+def select_one(sql, *args):
+    return _select(sql,  True, *args)
+
+def select_int(sql, *args):
+    d = _select(sql, True, *args)
+    if len(d) != 1:
+        raise MultiColumnsError('Except only one colum')
+    return d.valuse()[0]
+
+def select(sql, *args):
+    return _select(sql, True, *args)
+
+
 class DBError(Exception):
     pass
 
@@ -97,6 +135,24 @@ class _Engine(object):
 
     def connect(self):
         return self._connect
+
+
+class Dict(dict):
+
+    def __init__(self, names = (), values = (), **kw):
+        super(Dict, self).__init__(**kw)
+        for k, v in zip(names, values):
+            self[k] = v
+
+    def __getattr__(self, key):
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(r"'Dict' object has no attribute '%s'" %key)
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
 
 
 
@@ -123,6 +179,8 @@ class _DbCtx(threading.local):
         Return cursor
         '''
         return self.connection.cursor()
+# thread-local db context:
+_db_ctx = _DbCtx()
 
 class _LasyConnection(object):
 
@@ -205,9 +263,12 @@ class _TransactionCtx(object):
         _db_ctx.connection.rollback()
         logging.info('rollback ok.')
 
-
-# thread-local db context:
-_db_ctx = _DbCtx()
-
+'''
+'u will get an error '_mysql_exception.InterfaceError: (0, '')' if you use two or more action when you creat one time creat_engine
+'''
 if __name__ == "__main__":
-    _db_ctx = _DbCtx()
+    create_engine('practice', 'practice', 'practiceDB','192.168.101.130', 3306,20)
+    # update('drop table if exists user')
+    update('create table user (id int primary key, name text, email text, passwd text, last_modified real)')
+    import doctest
+    doctest.testmod()
